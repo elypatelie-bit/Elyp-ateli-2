@@ -1,0 +1,268 @@
+// ============================================================================
+// ELYP ATELIÊ — schema do banco de dados (PostgreSQL via Prisma)
+// ============================================================================
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------------------------------------------------------------------------
+// Autenticação (NextAuth) — modelos exigidos pelo Prisma Adapter
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  phone         String?   @unique
+  phoneVerified DateTime?
+  role          Role      @default(CUSTOMER)
+
+  // dados de cliente da loja
+  totalSpent   Decimal  @default(0) @db.Decimal(10, 2)
+  ordersCount  Int      @default(0)
+  favorites    String[] @default([]) // ids de Product favoritados
+  lastAddress  Json?    // {cep, street, number, neighborhood, city, complement}
+
+  accounts Account[]
+  sessions Session[]
+  orders   Order[]
+  reviews  Review[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Usado tanto pelo fluxo padrão do NextAuth quanto pelo nosso OTP por telefone
+model VerificationToken {
+  identifier String // e-mail OU telefone
+  token      String @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Loja
+// ---------------------------------------------------------------------------
+
+model Store {
+  id           String  @id @default(cuid())
+  name         String  @default("Elyp ateliê")
+  slug         String  @unique @default("elyp-atelie")
+  whatsapp     String  @default("+5521966516910")
+  instagram    String?
+  pixKey       String  @default("elyp.atelie@gmail.com")
+  merchantName String  @default("Elyp Atelie")
+  city         String  @default("Sao Paulo")
+  state        String  @default("SP")
+  address      String  @default("Rua José Domingues, 19 — Enseada")
+  logoUrl      String?
+
+  monthlyGoal        Decimal @default(3000) @db.Decimal(10, 2)
+  lowStockThreshold  Int     @default(3)
+  timezoneOffsetHours Int    @default(-3)
+
+  // faixas de frete (estimativa própria por cidade/UF; ver src/lib/shipping.ts
+  // para trocar por cotação real via Melhor Envio/Correios)
+  shippingLocalFee      Decimal @default(12) @db.Decimal(10, 2)
+  shippingLocalDays     Int     @default(2)
+  shippingStateFee      Decimal @default(22) @db.Decimal(10, 2)
+  shippingStateDays     Int     @default(5)
+  shippingNationalFee   Decimal @default(35) @db.Decimal(10, 2)
+  shippingNationalDays  Int     @default(10)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String
+  emoji     String?
+  sortOrder Int       @default(0)
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  title         String
+  description   String?  @db.Text
+  price         Decimal  @db.Decimal(10, 2)
+  promoPrice    Decimal? @db.Decimal(10, 2)
+  cogs          Decimal? @db.Decimal(10, 2)
+  isMadeToOrder Boolean  @default(false)
+  stockQuantity Int      @default(0)
+  isActive      Boolean  @default(true)
+  isPinned      Boolean  @default(false)
+  images        String[] @default([])
+
+  variantLabel   String?
+  variantOptions Json? // [{ name: string, priceDelta: number }]
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  orderItems OrderItem[]
+  reviews    Review[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int // 1 a 5
+  comment   String?  @db.Text
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId   String // pedido que comprova a compra (obrigatório: só quem comprou avalia)
+  createdAt DateTime @default(now())
+
+  @@unique([productId, userId]) // 1 avaliação por cliente por produto
+}
+
+enum OrderStatus {
+  NEW
+  CONFIRMED
+  IN_PREPARATION
+  READY
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  PIX
+  SPLIT
+  CARD
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+}
+
+model Order {
+  id          String @id @default(cuid())
+  dailyNumber Int    @default(autoincrement()) // sequência atômica garantida pelo Postgres
+
+  status         OrderStatus   @default(NEW)
+  statusHistory  Json          @default("[]") // [{status, at}]
+  trackingCode   String?
+
+  subtotal    Decimal @db.Decimal(10, 2)
+  shippingFee Decimal @default(0) @db.Decimal(10, 2)
+  discount    Decimal @default(0) @db.Decimal(10, 2)
+  totalAmount Decimal @db.Decimal(10, 2)
+  estimatedDeliveryDays Int?
+
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus @default(PENDING)
+  pixBrCode     String?       @db.Text
+  mpPaymentId   String?       // id do pagamento no Mercado Pago (pra conferir no webhook)
+
+  // endereço de entrega (obrigatório, sem opção de retirada)
+  cep          String
+  street       String
+  number       String
+  neighborhood String
+  city         String
+  complement   String?
+
+  customerId String
+  customer   User   @relation(fields: [customerId], references: [id])
+
+  couponId String?
+  coupon   Coupon? @relation(fields: [couponId], references: [id])
+
+  items        OrderItem[]
+  transactions LedgerEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  title       String
+  variantName String?
+  price       Decimal  @db.Decimal(10, 2)
+  quantity    Int
+}
+
+model Coupon {
+  id            String    @id @default(cuid())
+  code          String    @unique
+  discountValue Decimal   @db.Decimal(10, 2)
+  isPercentage  Boolean   @default(false)
+  minOrderValue Decimal?  @db.Decimal(10, 2)
+  expiresAt     DateTime?
+  isActive      Boolean   @default(true)
+  orders        Order[]
+  createdAt     DateTime  @default(now())
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model LedgerEntry {
+  id          String          @id @default(cuid())
+  description String
+  amount      Decimal         @db.Decimal(10, 2)
+  type        TransactionType
+  category    String
+  orderId     String?
+  order       Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdAt   DateTime        @default(now())
+}

@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background-color: #FAF9F4;
+  color: #1B2333;
+}
+
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+@keyframes slide-left {
+  0% { transform: translateX(100%); }
+  100% { transform: translateX(0); }
+}
+.animate-slide-left { animation: slide-left 0.3s ease-out forwards; }
